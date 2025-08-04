@@ -1,0 +1,11 @@
+# Exclude local virtual environments and OS/editor artifacts from Docker build context
+auth/
+.venv/
+venv/
+ENV/
+env/
+
+__pycache__/
+
+.vscode
+

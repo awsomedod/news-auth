@@ -1,0 +1,29 @@
+# Exclude local virtual environments and OS/editor artifacts from Docker build context
+auth/
+.venv/
+venv/
+ENV/
+env/
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+.git
+.gitignore
+.vscode
+.DS_Store
+
+# Byte-compiled / optimized / DLL files
+*.so
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+
+# Tests and coverage
+.coverage
+htmlcov/
+.pytest_cache/
