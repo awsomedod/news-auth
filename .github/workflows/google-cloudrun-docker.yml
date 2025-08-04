@@ -68,10 +68,8 @@ jobs:
         run: |-
           gcloud auth list
           gcloud config set project ${{ env.PROJECT_ID }}
-          gcloud projects get-iam-policy ${{ env.PROJECT_ID }} \
-            --flatten="bindings[].members" \
-            --format='table(bindings.role)' \
-            --filter="bindings.members:serviceAccount:fornews@news-467923.iam.gserviceaccount.com"
+          gcloud artifacts repositories list --location=${{ env.REGION }}
+            
 
       # BEGIN - Docker auth and build
       #
