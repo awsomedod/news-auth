@@ -62,6 +62,16 @@ jobs:
         with:
           workload_identity_provider: '${{ env.WORKLOAD_IDENTITY_PROVIDER }}'
           service_account: 'fornews@news-467923.iam.gserviceaccount.com'
+          
+      # Add this step right after auth
+      - name: 'Debug IAM Permissions'
+        run: |-
+          gcloud auth list
+          gcloud config set project ${{ env.PROJECT_ID }}
+          gcloud projects get-iam-policy ${{ env.PROJECT_ID }} \
+            --flatten="bindings[].members" \
+            --format='table(bindings.role)' \
+            --filter="bindings.members:serviceAccount:fornews@news-467923.iam.gserviceaccount.com"
 
       # BEGIN - Docker auth and build
       #
