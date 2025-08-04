@@ -14,7 +14,7 @@ import json
 
 
 _client = secretmanager.SecretManagerServiceClient()
-_project_id = "news-467923" # or hard‐code your project
+_project_id = "news-467923" # or hard‐code your project test
 
 def get_secret(secret_id: str, version: str = "latest") -> str:
     name = f"projects/{_project_id}/secrets/{secret_id}/versions/{version}"
