@@ -34,8 +34,8 @@ jobs:
 
       - name: 'Build and Push Container'
         run: |-
-          docker build -t us-west2-docker.pkg.dev/news-467923/news-auth/peton:${{ github.sha }} .
-          docker push us-west2-docker.pkg.dev/news-467923/news-auth/peton:${{ github.sha }}
+          docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE }}/peton:${{ github.sha }} .
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE }}/peton:${{ github.sha }}
       - name: 'Deploy to Cloud Run'
 
         # END - Docker auth and build
