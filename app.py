@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from google.oauth2 import id_token as google_id_token
 from google.auth.transport import requests as google_requests
 from google.cloud import secretmanager
+from flask_cors import CORS
 import json
 
 
@@ -36,6 +37,12 @@ db = firestore.client()
 transaction = db.transaction()
 
 app = Flask(__name__)
+CORS(
+    app,
+    resources={r"/*": {"origins": "*"}},
+    supports_credentials=True
+)
+
 
 
 def validate_username(username):
