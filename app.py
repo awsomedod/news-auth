@@ -1,16 +1,16 @@
 from flask import Flask, request, jsonify
-# from email_validator import validate_email, EmailNotValidError
-# import bcrypt
-# from firebase_admin import credentials, firestore, initialize_app
-# from firebase_admin.firestore import transactional
-# import re
-# import os
-# import jwt
-# from datetime import datetime, timedelta, timezone
-# from google.oauth2 import id_token as google_id_token
-# from google.auth.transport import requests as google_requests
-# from google.cloud import secretmanager
-# import json
+from email_validator import validate_email, EmailNotValidError
+import bcrypt
+from firebase_admin import credentials, firestore, initialize_app
+from firebase_admin.firestore import transactional
+import re
+import os
+import jwt
+from datetime import datetime, timedelta, timezone
+from google.oauth2 import id_token as google_id_token
+from google.auth.transport import requests as google_requests
+from google.cloud import secretmanager
+import json
 
 
 # _client = secretmanager.SecretManagerServiceClient()
