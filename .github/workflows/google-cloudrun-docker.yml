@@ -46,8 +46,7 @@ jobs:
           service: '${{ env.SERVICE }}'
           region: '${{ env.REGION }}'
           image: '${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE }}/peton:${{ github.sha }}'
-          service_account: '${{ env.SERVICE_ACCOUNT }}'
-          flags: '--allow-unauthenticated'
+          flags: '--allow-unauthenticated --service-account=${{ env.SERVICE_ACCOUNT }}'
       - name: 'Show output'
         run: |2-
           echo ${{ steps.deploy.outputs.url }}
