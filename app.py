@@ -26,7 +26,7 @@ def get_secret(secret_id: str, version: str = "latest") -> str:
 JWT_SECRET = get_secret("JWT_SECRET")
 JWT_EXPIRES_IN = 86400  # seconds, default 15 minutes
 JWT_ISSUER = "auth-service"
-# GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 
 firebase_cred_json = get_secret("firebaseCredentials")
 firebase_cred = json.loads(firebase_cred_json)
@@ -69,25 +69,25 @@ def issue_jwt(user_id, email, username):
     return jwt.encode(payload, JWT_SECRET, algorithm='HS256')
 
 
-# def verify_google_id_token(id_token_str: str):
-#     """
-#     Verify Google ID token and return claims.
-#     Raises Exception if verification fails or email not verified or audience mismatch.
-#     """
-#     if not GOOGLE_CLIENT_ID:
-#         raise Exception("Server misconfiguration: GOOGLE_CLIENT_ID not set")
+def verify_google_id_token(id_token_str: str):
+    """
+    Verify Google ID token and return claims.
+    Raises Exception if verification fails or email not verified or audience mismatch.
+    """
+    if not GOOGLE_CLIENT_ID:
+        raise Exception("Server misconfiguration: GOOGLE_CLIENT_ID not set")
 
-#     request_adapter = google_requests.Request()
-#     claims = google_id_token.verify_oauth2_token(id_token_str, request_adapter, GOOGLE_CLIENT_ID)
+    request_adapter = google_requests.Request()
+    claims = google_id_token.verify_oauth2_token(id_token_str, request_adapter, GOOGLE_CLIENT_ID)
 
-#     if claims.get("aud") != GOOGLE_CLIENT_ID:
-#         raise Exception("Invalid audience")
-#     if not claims.get("email"):
-#         raise Exception("Google token missing email")
-#     if not claims.get("email_verified", False):
-#         raise Exception("Email not verified")
+    if claims.get("aud") != GOOGLE_CLIENT_ID:
+        raise Exception("Invalid audience")
+    if not claims.get("email"):
+        raise Exception("Google token missing email")
+    if not claims.get("email_verified", False):
+        raise Exception("Email not verified")
 
-#     return claims
+    return claims
 
 @transactional
 def register_user(txn, data):
@@ -115,6 +115,34 @@ def register_user(txn, data):
     txn.set(user_ref,     {'userId': new_ref.id})
     
     return new_ref.id
+
+@transactional
+def register_google_user(txn, user_data, email, username):
+    """
+    Register a new Google user with transactional safety.
+    Ensures username and email uniqueness atomically.
+    """
+    email_ref = db.collection('userEmails').document(email)
+    username_ref = db.collection('usernames').document(username)
+    
+    # 1. ensure uniqueness within transaction
+    if email_ref.get(transaction=txn).exists:
+        raise Exception("Email already registered")
+    if username_ref.get(transaction=txn).exists:
+        raise Exception("Username already taken")
+    
+    # 2. create user doc
+    new_user_ref = db.collection('users').document()  # auto-ID
+    txn.set(new_user_ref, {
+        **user_data,
+        'created_at': firestore.SERVER_TIMESTAMP,
+    })
+    
+    # 3. create lookups
+    txn.set(email_ref, {'userId': new_user_ref.id})
+    txn.set(username_ref, {'userId': new_user_ref.id})
+    
+    return new_user_ref.id
 
 @app.route('/register', methods=['POST'])
 def register():
@@ -229,11 +257,7 @@ def login():
 
         if not identifier or not password:
             return jsonify({'error': 'Identifier and password are required'}), 400
-
-        # 1) Try identifier as email
-        email_candidate = identifier.lower()
-        email_ref = db.collection('userEmails').document(email_candidate)
-        email_doc = email_ref.get()
+        
         user_id = None
 
         user_id = find_user_id_by_identifier(identifier)
@@ -249,6 +273,13 @@ def login():
             return jsonify({'error': 'Invalid credentials'}), 401
 
         user_data = user_doc.to_dict() or {}
+        auth_provider = user_data.get('auth_provider', 'email')
+        
+        # Check if this is a Google-only account
+        if auth_provider == 'google':
+            return jsonify({'error': 'This account was created with Google. Please use Google login instead.'}), 400
+        
+        # For email accounts, check password hash
         stored_hash = user_data.get('password_hash', '')
         if not stored_hash:
             return jsonify({'error': 'Invalid credentials'}), 401
@@ -278,235 +309,144 @@ def login():
         print(f"Login error: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
 
-# @app.route('/signup/google', methods=['POST'])
-# def signup_google():
-#     """
-#     Create a new account using Google ID token with preferred username.
-#     Body: { "id_token": "...", "username": "preferred_name" }
-#     - Verifies Google token and requires verified email.
-#     - Ensures username availability with existing validation.
-#     - Creates user doc (auth_provider: "google", providers.google details).
-#     - Creates lookup docs userEmails/{email} and usernames/{username}.
-#     - Returns your JWT and user.
-#     """
-#     try:
-#         if not JWT_SECRET:
-#             return jsonify({'error': 'Server misconfiguration: JWT secret not set'}), 500
+@app.route('/signup/google', methods=['POST'])
+def signup_google():
+    """
+    Create a new account using Google ID token with preferred username.
+    Body: { "id_token": "...", "username": "preferred_name" }
+    - Verifies Google token and requires verified email.
+    - Ensures username availability with existing validation.
+    - Creates user doc (auth_provider: "google", providers.google details).
+    - Creates lookup docs userEmails/{email} and usernames/{username}.
+    - Returns your JWT and user.
+    """
+    try:
+        if not JWT_SECRET:
+            return jsonify({'error': 'Server misconfiguration: JWT secret not set'}), 500
 
-#         data = request.get_json() or {}
-#         id_token_str = data.get('id_token', '')
-#         preferred_username = str(data.get('username', '')).strip()
+        data = request.get_json() or {}
+        id_token_str = data.get('id_token', '')
+        preferred_username = str(data.get('username', '')).strip()
 
-#         if not id_token_str or not preferred_username:
-#             return jsonify({'error': 'id_token and username are required'}), 400
+        if not id_token_str or not preferred_username:
+            return jsonify({'error': 'id_token and username are required'}), 400
 
-#         # Validate username format
-#         if not validate_username(preferred_username):
-#             return jsonify({'error': 'Username must be 3-30 characters, alphanumeric and underscores only'}), 400
+        # Validate username format
+        if not validate_username(preferred_username):
+            return jsonify({'error': 'Username must be 3-30 characters, alphanumeric and underscores only'}), 400
 
-#         # Verify Google token and extract claims
-#         try:
-#             claims = verify_google_id_token(id_token_str)
-#         except Exception as e:
-#             return jsonify({'error': f'Invalid Google token: {str(e)}'}), 401
+        # Verify Google token and extract claims
+        try:
+            claims = verify_google_id_token(id_token_str)
+        except Exception as e:
+            return jsonify({'error': f'Invalid Google token: {str(e)}'}), 401
 
-#         email = claims['email'].lower().strip()
-#         sub = claims.get('sub')
-#         name = claims.get('name')
-#         picture = claims.get('picture')
+        email = claims['email'].lower().strip()
+        sub = claims.get('sub')
 
-#         # Ensure username not taken
-#         username_ref = db.collection('usernames').document(preferred_username)
-#         if username_ref.get().exists:
-#             return jsonify({'error': 'Username already taken'}), 409
+        # Create user document data
+        user_data = {
+            'email': email,
+            'username': preferred_username,
+            'auth_provider': 'google',
+            'providers': {
+                'google': {
+                    'sub': sub,
+                    'linked_at': firestore.SERVER_TIMESTAMP
+                }
+            }
+            # Do not include password_hash for Google accounts
+            # created_at will be added by the transactional function
+        }
 
-#         # Check if email already registered (any provider)
-#         email_ref = db.collection('userEmails').document(email)
-#         if email_ref.get().exists:
-#             # Email already registered; explicit linking required
-#             return jsonify({'error': 'Email already registered. Please link Google to your existing account.'}), 409
+        # Register user with transactional safety
+        try:
+            user_id = register_google_user(transaction, user_data, email, preferred_username)
+        except Exception as e:
+            if "Email already registered" in str(e):
+                return jsonify({'error': 'Email already registered. Please link Google to your existing account.'}), 409
+            elif "Username already taken" in str(e):
+                return jsonify({'error': 'Username already taken'}), 409
+            else:
+                return jsonify({'error': f'Internal server error: {e}'}), 500
 
-#         # Create user doc
-#         new_user_ref = db.collection('users').document()
-#         user_payload = {
-#             'email': email,
-#             'username': preferred_username,
-#             'auth_provider': 'google',
-#             'providers': {
-#                 'google': {
-#                     'sub': sub,
-#                     'name': name,
-#                     'picture': picture,
-#                     'linked_at': firestore.SERVER_TIMESTAMP
-#                 }
-#             },
-#             'created_at': firestore.SERVER_TIMESTAMP
-#         }
-#         # Do not include password_hash for Google accounts
-#         batch = db.batch()
-#         batch.set(new_user_ref, user_payload)
-#         batch.set(email_ref, {'userId': new_user_ref.id})
-#         batch.set(username_ref, {'userId': new_user_ref.id})
-#         batch.commit()
+        token = issue_jwt(user_id, email, preferred_username)
+        return jsonify({
+            'token': token,
+            'user': {
+                'id': user_id,
+                'email': email,
+                'username': preferred_username,
+                'auth_provider': 'google'
+            }
+        }), 201
 
-#         token = issue_jwt(new_user_ref.id, email, preferred_username)
-#         return jsonify({
-#             'token': token,
-#             'user': {
-#                 'id': new_user_ref.id,
-#                 'email': email,
-#                 'username': preferred_username,
-#                 'auth_provider': 'google'
-#             }
-#         }), 201
-
-#     except Exception as e:
-#         print(f"Google signup error: {str(e)}")
-#         return jsonify({'error': 'Internal server error'}), 500
+    except Exception as e:
+        print(f"Google signup error: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
 
 
-# @app.route('/login/google', methods=['POST'])
-# def login_google():
-#     """
-#     Login with Google ID token for accounts previously created or linked.
-#     Body: { "id_token": "..." }
-#     - Verifies Google token (audience, signature, email_verified).
-#     - Looks up user by email and ensures google provider is present (or allow login if account is google-native).
-#     - Returns your JWT and user.
-#     """
-#     try:
-#         if not JWT_SECRET:
-#             return jsonify({'error': 'Server misconfiguration: JWT secret not set'}), 500
+@app.route('/login/google', methods=['POST'])
+def login_google():
+    """
+    Login with Google ID token for accounts previously created or linked.
+    Body: { "id_token": "..." }
+    - Verifies Google token (audience, signature, email_verified).
+    - Looks up user by email and ensures google provider is present (or allow login if account is google-native).
+    - Returns your JWT and user.
+    """
+    try:
+        if not JWT_SECRET:
+            return jsonify({'error': 'Server misconfiguration: JWT secret not set'}), 500
 
-#         data = request.get_json() or {}
-#         id_token_str = data.get('id_token', '')
-#         if not id_token_str:
-#             return jsonify({'error': 'id_token is required'}), 400
+        data = request.get_json() or {}
+        id_token_str = data.get('id_token', '')
+        if not id_token_str:
+            return jsonify({'error': 'id_token is required'}), 400
 
-#         try:
-#             claims = verify_google_id_token(id_token_str)
-#         except Exception as e:
-#             return jsonify({'error': f'Invalid Google token: {str(e)}'}), 401
+        try:
+            claims = verify_google_id_token(id_token_str)
+        except Exception as e:
+            return jsonify({'error': f'Invalid Google token: {str(e)}'}), 401
 
-#         email = claims['email'].lower().strip()
+        email = claims['email'].lower().strip()
 
-#         # Resolve user by email
-#         email_ref = db.collection('userEmails').document(email)
-#         email_doc = email_ref.get()
-#         if not email_doc.exists:
-#             return jsonify({'error': 'Account not found. Please sign up with Google first.'}), 404
+        # Resolve user by email
+        email_ref = db.collection('userEmails').document(email)
+        email_doc = email_ref.get()
+        if not email_doc.exists:
+            return jsonify({'error': 'Account not found. Please sign up with Google first.'}), 404
 
-#         user_id = (email_doc.to_dict() or {}).get('userId')
-#         if not user_id:
-#             return jsonify({'error': 'Invalid credentials'}), 401
+        user_id = (email_doc.to_dict() or {}).get('userId')
+        if not user_id:
+            return jsonify({'error': 'Invalid credentials'}), 401
 
-#         user_ref = db.collection('users').document(user_id)
-#         user_doc = user_ref.get()
-#         if not user_doc.exists:
-#             return jsonify({'error': 'Invalid credentials'}), 401
+        user_ref = db.collection('users').document(user_id)
+        user_doc = user_ref.get()
+        if not user_doc.exists:
+            return jsonify({'error': 'Invalid credentials'}), 401
 
-#         user_data = user_doc.to_dict() or {}
-#         providers = user_data.get('providers', {})
-#         # Enforce explicit linking: only allow login if google provider is present or auth_provider is google
-#         if not (user_data.get('auth_provider') == 'google' or 'google' in providers):
-#             return jsonify({'error': 'Google not linked to this account. Please link your Google account first.'}), 409
+        user_data = user_doc.to_dict() or {}
+        providers = user_data.get('providers', {})
+        # Enforce explicit linking: only allow login if google provider is present or auth_provider is google
+        if not (user_data.get('auth_provider') == 'google' or 'google' in providers):
+            return jsonify({'error': 'Google not linked to this account. Please link your Google account first.'}), 409
 
-#         token = issue_jwt(user_doc.id, user_data.get('email'), user_data.get('username'))
-#         return jsonify({
-#             'token': token,
-#             'user': {
-#                 'id': user_doc.id,
-#                 'email': user_data.get('email'),
-#                 'username': user_data.get('username'),
-#                 'auth_provider': user_data.get('auth_provider', 'email')
-#             }
-#         }), 200
+        token = issue_jwt(user_doc.id, user_data.get('email'), user_data.get('username'))
+        return jsonify({
+            'token': token,
+            'user': {
+                'id': user_doc.id,
+                'email': user_data.get('email'),
+                'username': user_data.get('username'),
+                'auth_provider': user_data.get('auth_provider', 'email')
+            }
+        }), 200
 
-#     except Exception as e:
-#         print(f"Google login error: {str(e)}")
-#         return jsonify({'error': 'Internal server error'}), 500
+    except Exception as e:
+        print(f"Google login error: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
 
-
-# @app.route('/link/google', methods=['POST'])
-# def link_google():
-#     """
-#     Explicitly link Google provider to an existing account.
-#     Headers: Authorization: Bearer <your JWT>
-#     Body: { "id_token": "..." }
-#     - Verifies caller via your JWT.
-#     - Verifies Google token; requires verified email.
-#     - Only allows linking if the Google email matches the user's stored email OR the email is not used by another user.
-#       For safety, require exact email match with the account's email.
-#     - Adds providers.google info; does not change username.
-#     """
-#     try:
-#         if not JWT_SECRET:
-#             return jsonify({'error': 'Server misconfiguration: JWT secret not set'}), 500
-
-#         # Extract bearer token from Authorization header
-#         auth_header = request.headers.get('Authorization', '')
-#         if not auth_header.startswith('Bearer '):
-#             return jsonify({'error': 'Authorization header missing or malformed'}), 401
-#         bearer = auth_header.split(' ', 1)[1]
-
-#         # Verify our JWT
-#         try:
-#             decoded = jwt.decode(bearer, JWT_SECRET, algorithms=['HS256'], options={'require': ['exp', 'iat']}, issuer=JWT_ISSUER)
-#         except Exception as e:
-#             return jsonify({'error': f'Invalid or expired token: {str(e)}'}), 401
-
-#         user_id = decoded.get('sub')
-#         if not user_id:
-#             return jsonify({'error': 'Invalid token subject'}), 401
-
-#         data = request.get_json() or {}
-#         id_token_str = data.get('id_token', '')
-#         if not id_token_str:
-#             return jsonify({'error': 'id_token is required'}), 400
-
-#         try:
-#             claims = verify_google_id_token(id_token_str)
-#         except Exception as e:
-#             return jsonify({'error': f'Invalid Google token: {str(e)}'}), 401
-
-#         email = claims['email'].lower().strip()
-#         sub = claims.get('sub')
-#         name = claims.get('name')
-#         picture = claims.get('picture')
-
-#         # Load current user
-#         user_ref = db.collection('users').document(user_id)
-#         user_doc = user_ref.get()
-#         if not user_doc.exists:
-#             return jsonify({'error': 'User not found'}), 404
-
-#         user_data = user_doc.to_dict() or {}
-#         # Require email match for explicit linking to avoid cross-account hijack
-#         if (user_data.get('email') or '').lower().strip() != email:
-#             return jsonify({'error': 'Google email does not match your account email'}), 409
-
-#         providers = user_data.get('providers', {})
-#         if 'google' in providers or user_data.get('auth_provider') == 'google':
-#             # Already linked
-#             return jsonify({'message': 'Google already linked'}), 200
-
-#         # Update user providers
-#         providers['google'] = {
-#             'sub': sub,
-#             'name': name,
-#             'picture': picture,
-#             'linked_at': firestore.SERVER_TIMESTAMP
-#         }
-#         updates = {
-#             'providers': providers
-#         }
-#         user_ref.update(updates)
-
-#         return jsonify({'message': 'Google account linked successfully'}), 200
-
-#     except Exception as e:
-#         print(f"Google link error: {str(e)}")
-#         return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/health', methods=['GET'])
 def health_check():
