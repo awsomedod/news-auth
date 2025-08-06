@@ -26,7 +26,7 @@ def get_secret(secret_id: str, version: str = "latest") -> str:
 JWT_SECRET = get_secret("JWT_SECRET")
 JWT_EXPIRES_IN = 86400  # seconds, default 15 minutes
 JWT_ISSUER = "auth-service"
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_ID = get_secret("GOOGLE_CLIENT_ID")
 
 firebase_cred_json = get_secret("firebaseCredentials")
 firebase_cred = json.loads(firebase_cred_json)
@@ -447,6 +447,48 @@ def login_google():
         print(f"Google login error: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
 
+
+@app.route('/check-username/<username>', methods=['GET'])
+def check_username_availability(username):
+    """
+    Check if a username is available.
+    Returns: { "available": boolean, "message": string }
+    """
+    try:
+        # Basic validation
+        if not username:
+            return jsonify({
+                'available': False, 
+                'message': 'Username is required'
+            }), 400
+        
+        username = username.strip()
+        
+        # Validate username format
+        if not validate_username(username):
+            return jsonify({
+                'available': False,
+                'message': 'Username must be 3-30 characters, alphanumeric and underscores only'
+            }), 400
+        
+        # Check if username exists
+        username_ref = db.collection('usernames').document(username)
+        username_doc = username_ref.get()
+        
+        if username_doc.exists:
+            return jsonify({
+                'available': False,
+                'message': 'Username is already taken'
+            }), 200
+        else:
+            return jsonify({
+                'available': True,
+                'message': 'Username is available'
+            }), 200
+            
+    except Exception as e:
+        print(f"Username check error: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/health', methods=['GET'])
 def health_check():
