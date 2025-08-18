@@ -158,7 +158,9 @@ def register():
             'password_hash': password_hash.decode('utf-8'),
             'created_at': datetime.now(timezone.utc),
             'auth_provider': 'email',
-            'configured': False
+            'configured': False,
+            'sources': [],
+            'summary_runs': [],
         }
         
         # Save to Firestore
@@ -323,6 +325,8 @@ def signup_google():
             'username': preferred_username,
             'auth_provider': 'google',
             'configured': False,
+            'sources': [],
+            'summary_runs': [],
             'providers': {
                 'google': {
                     'sub': sub,
